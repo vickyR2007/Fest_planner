@@ -1,0 +1,142 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net: Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helper Functions ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isParentFestOwner(festId) {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/fests/$(festId)) &&
+        get(/databases/$(database)/documents/fests/$(festId)).data.ownerId == request.auth.uid;
+    }
+
+    // Entity validation: Fest
+    function isValidFest(data) {
+      return data.keys().hasAll(['id', 'name', 'collegeName', 'startDate', 'endDate', 'totalBudget', 'status', 'ownerId']) &&
+        data.keys().hasOnly(['id', 'name', 'collegeName', 'edition', 'startDate', 'endDate', 'totalBudget', 'description', 'status', 'ownerId', 'ownerEmail', 'committee', 'createdAt', 'updatedAt']) &&
+        data.id is string && data.id.size() <= 128 &&
+        data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
+        data.collegeName is string && data.collegeName.size() <= 150 &&
+        data.startDate is string && data.startDate.size() <= 20 &&
+        data.endDate is string && data.endDate.size() <= 20 &&
+        data.totalBudget is number && data.totalBudget >= 0 &&
+        data.status in ['draft', 'planning', 'live', 'concluded'] &&
+        data.ownerId == request.auth.uid;
+    }
+
+    // Entity validation: Venue
+    function isValidVenue(data, parentFestId) {
+      return data.keys().hasAll(['id', 'festId', 'name', 'location', 'capacity', 'availableStart', 'availableEnd', 'ownerId']) &&
+        data.keys().hasOnly(['id', 'festId', 'name', 'location', 'capacity', 'availableStart', 'availableEnd', 'pricingPerHour', 'facilities', 'ownerId', 'createdAt', 'updatedAt']) &&
+        data.id is string && data.id.size() <= 128 &&
+        data.festId == parentFestId &&
+        data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
+        data.location is string && data.location.size() <= 150 &&
+        data.capacity is number && data.capacity > 0 && data.capacity <= 100000 &&
+        data.availableStart is string && data.availableStart.size() <= 10 &&
+        data.availableEnd is string && data.availableEnd.size() <= 10 &&
+        data.ownerId == request.auth.uid;
+    }
+
+    // Entity validation: Event
+    function isValidEvent(data, parentFestId) {
+      return data.keys().hasAll(['id', 'festId', 'title', 'category', 'date', 'startTime', 'endTime', 'expectedParticipants', 'estimatedCost', 'ownerId']) &&
+        data.keys().hasOnly(['id', 'festId', 'title', 'category', 'department', 'date', 'startTime', 'endTime', 'durationMinutes', 'expectedParticipants', 'estimatedCost', 'venueId', 'venueName', 'requiredResources', 'leadCoordinator', 'leadContact', 'status', 'ownerId', 'createdAt', 'updatedAt']) &&
+        data.id is string && data.id.size() <= 128 &&
+        data.festId == parentFestId &&
+        data.title is string && data.title.size() > 0 && data.title.size() <= 150 &&
+        data.category is string && data.category.size() <= 50 &&
+        data.date is string && data.date.size() <= 20 &&
+        data.startTime is string && data.startTime.size() <= 10 &&
+        data.endTime is string && data.endTime.size() <= 10 &&
+        data.expectedParticipants is number && data.expectedParticipants >= 0 &&
+        data.estimatedCost is number && data.estimatedCost >= 0 &&
+        data.ownerId == request.auth.uid;
+    }
+
+    // Entity validation: BudgetItem
+    function isValidBudgetItem(data, parentFestId) {
+      return data.keys().hasAll(['id', 'festId', 'category', 'title', 'allocatedAmount', 'spentAmount', 'ownerId']) &&
+        data.keys().hasOnly(['id', 'festId', 'category', 'title', 'allocatedAmount', 'spentAmount', 'notes', 'ownerId', 'createdAt', 'updatedAt']) &&
+        data.id is string && data.id.size() <= 128 &&
+        data.festId == parentFestId &&
+        data.category is string && data.category.size() <= 50 &&
+        data.title is string && data.title.size() > 0 && data.title.size() <= 100 &&
+        data.allocatedAmount is number && data.allocatedAmount >= 0 &&
+        data.spentAmount is number && data.spentAmount >= 0 &&
+        data.ownerId == request.auth.uid;
+    }
+
+    // --- Collections ---
+
+    // Master Fest Document
+    match /fests/{festId} {
+      allow get: if isSignedIn() && (existing().ownerId == request.auth.uid);
+      allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(festId) && isValidFest(incoming()) && incoming().id == festId;
+      allow update: if isSignedIn() && isValidId(festId) && isValidFest(incoming()) &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().id == existing().id;
+      allow delete: if isSignedIn() && isValidId(festId) && existing().ownerId == request.auth.uid;
+
+      // Venues Subcollection
+      match /venues/{venueId} {
+        allow get: if isSignedIn() && (existing().ownerId == request.auth.uid || isParentFestOwner(festId));
+        allow list: if isSignedIn() && (resource.data.ownerId == request.auth.uid || isParentFestOwner(festId));
+        allow create: if isSignedIn() && isValidId(venueId) && isValidVenue(incoming(), festId) &&
+          incoming().id == venueId && (incoming().ownerId == request.auth.uid || isParentFestOwner(festId));
+        allow update: if isSignedIn() && isValidId(venueId) && isValidVenue(incoming(), festId) &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().id == existing().id;
+        allow delete: if isSignedIn() && isValidId(venueId) &&
+          (existing().ownerId == request.auth.uid || isParentFestOwner(festId));
+      }
+
+      // Events Subcollection
+      match /events/{eventId} {
+        allow get: if isSignedIn() && (existing().ownerId == request.auth.uid || isParentFestOwner(festId));
+        allow list: if isSignedIn() && (resource.data.ownerId == request.auth.uid || isParentFestOwner(festId));
+        allow create: if isSignedIn() && isValidId(eventId) && isValidEvent(incoming(), festId) &&
+          incoming().id == eventId && (incoming().ownerId == request.auth.uid || isParentFestOwner(festId));
+        allow update: if isSignedIn() && isValidId(eventId) && isValidEvent(incoming(), festId) &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().id == existing().id;
+        allow delete: if isSignedIn() && isValidId(eventId) &&
+          (existing().ownerId == request.auth.uid || isParentFestOwner(festId));
+      }
+
+      // Budget Items Subcollection
+      match /budgetItems/{itemId} {
+        allow get: if isSignedIn() && (existing().ownerId == request.auth.uid || isParentFestOwner(festId));
+        allow list: if isSignedIn() && (resource.data.ownerId == request.auth.uid || isParentFestOwner(festId));
+        allow create: if isSignedIn() && isValidId(itemId) && isValidBudgetItem(incoming(), festId) &&
+          incoming().id == itemId && (incoming().ownerId == request.auth.uid || isParentFestOwner(festId));
+        allow update: if isSignedIn() && isValidId(itemId) && isValidBudgetItem(incoming(), festId) &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().id == existing().id;
+        allow delete: if isSignedIn() && isValidId(itemId) &&
+          (existing().ownerId == request.auth.uid || isParentFestOwner(festId));
+      }
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "FESTOS AI",
+  "description": "Intelligent college fest planning web application for Indian engineering colleges with scheduling, venue conflict detection, budget management, and AI Copilot integration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
